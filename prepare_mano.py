@@ -1,3 +1,6 @@
+import sys
+sys.path.append('./')
+
 from config import *
 from kinematics import *
 import numpy as np

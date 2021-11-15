@@ -1,9 +1,12 @@
+import sys
+sys.path.append('./')
+
 import numpy as np
 from transforms3d.quaternions import quat2mat
 
-from config import *
+from config_tf import *
 from kinematics import *
-from utils import *
+from utils_tf import *
 
 
 class HandMesh():

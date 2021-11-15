@@ -1,12 +1,14 @@
 import os
+import sys
+sys.path.append('./')
 
 import numpy as np
 import tensorflow as tf
 
-from config import *
+from config_tf import *
 from kinematics import *
 from network import *
-from utils import *
+from utils_tf import *
 
 
 class ModelDet:
@@ -22,11 +24,11 @@ class ModelDet:
     """
     self.graph = tf.Graph()
     with self.graph.as_default():
-      with tf.variable_scope('prior_based_hand'):
-        config = tf.ConfigProto()
+      with tf.compat.v1.variable_scope('prior_based_hand'):
+        config = tf.compat.v1.ConfigProto()
         config.gpu_options.allow_growth = True
-        self.sess = tf.Session(config=config)
-        self.input_ph = tf.placeholder(tf.uint8, [128, 128, 3])
+        self.sess = tf.compat.v1.Session(config=config)
+        self.input_ph = tf.compat.v1.placeholder(tf.uint8, [128, 128, 3])
         self.feed_img = \
           tf.cast(tf.expand_dims(self.input_ph, 0), tf.float32) / 255
         self.hmaps, self.dmaps, self.lmaps = \
@@ -38,14 +40,14 @@ class ModelDet:
 
         self.uv = tf_hmap_to_uv(self.hmap)
         self.delta = tf.gather_nd(
-          tf.transpose(self.dmap, [0, 3, 1, 2, 4]), self.uv, batch_dims=2
+          tf.transpose(a=self.dmap, perm=[0, 3, 1, 2, 4]), self.uv, batch_dims=2
         )[0]
         self.xyz = tf.gather_nd(
-          tf.transpose(self.lmap, [0, 3, 1, 2, 4]), self.uv, batch_dims=2
+          tf.transpose(a=self.lmap, perm=[0, 3, 1, 2, 4]), self.uv, batch_dims=2
         )[0]
 
         self.uv = self.uv[0]
-      tf.train.Saver().restore(self.sess, model_path)
+      tf.compat.v1.train.Saver().restore(self.sess, model_path)
 
   def process(self, img):
     """
@@ -91,14 +93,14 @@ class ModelIK:
     """
     self.graph = tf.Graph()
     with self.graph.as_default():
-      self.input_ph = tf.placeholder(tf.float32, [1, input_size, 3])
-      with tf.name_scope('network'):
+      self.input_ph = tf.compat.v1.placeholder(tf.float32, [1, input_size, 3])
+      with tf.compat.v1.name_scope('network'):
         self.theta = \
           network_fn(self.input_ph, net_depth, net_width, training=False)[0]
-        config = tf.ConfigProto()
+        config = tf.compat.v1.ConfigProto()
         config.gpu_options.allow_growth = True
-        self.sess = tf.Session(config=config)
-      tf.train.Saver().restore(self.sess, model_path)
+        self.sess = tf.compat.v1.Session(config=config)
+      tf.compat.v1.train.Saver().restore(self.sess, model_path)
 
   def process(self, joints):
     """
@@ -127,7 +129,10 @@ class ModelPipeline:
   """
   def __init__(self):
     # load reference MANO hand pose
-    mano_ref_xyz = load_pkl(HAND_MESH_MODEL_PATH)['joints']
+    try:
+      mano_ref_xyz = load_pkl(HAND_MESH_MODEL_PATH)['joints']
+    except:
+      mano_ref_xyz = load_pkl(os.path.join('minimal_hand', HAND_MESH_MODEL_PATH))['joints']
     # convert the kinematic definition to MPII style, and normalize it
     mpii_ref_xyz = mano_to_mpii(mano_ref_xyz) / IK_UNIT_LENGTH
     mpii_ref_xyz -= mpii_ref_xyz[9:10]
@@ -138,13 +143,18 @@ class ModelPipeline:
     self.mpii_ref_xyz = mpii_ref_xyz
     self.mpii_ref_delta = mpii_ref_delta
 
-    self.det_model = ModelDet(DETECTION_MODEL_PATH)
+    try:
+      self.det_model = ModelDet(DETECTION_MODEL_PATH)
+    except:
+      self.det_model = ModelDet(os.path.join("minimal_hand", DETECTION_MODEL_PATH))
     # 84 = 21 joint coordinates
     #    + 21 bone orientations
     #    + 21 joint coordinates in reference pose
     #    + 21 bone orientations in reference pose
-    self.ik_model = ModelIK(84, iknet, IK_MODEL_PATH, 6, 1024)
-
+    try:
+      self.ik_model = ModelIK(84, iknet, IK_MODEL_PATH, 6, 1024)
+    except:
+      self.ik_model = ModelIK(84, iknet, os.path.join("minimal_hand", IK_MODEL_PATH), 6, 1024)
   def process(self, frame):
     """
     Process a single frame.
@@ -161,7 +171,7 @@ class ModelPipeline:
     np.ndarray, shape [21, 4]
       Joint rotations.
     """
-    xyz, _ = self.det_model.process(frame)
+    xyz, uv = self.det_model.process(frame)
     delta, length = xyz_to_delta(xyz, MPIIHandJoints)
     delta *= length
     pack = np.concatenate(
@@ -169,4 +179,8 @@ class ModelPipeline:
     )
     theta = self.ik_model.process(pack)
 
-    return xyz, theta
+    new_uv = uv.copy()
+    new_uv[:, 0] = uv[:, 1]
+    new_uv[:, 1] = uv[:, 0]
+
+    return new_uv*4, xyz, theta
